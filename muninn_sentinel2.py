@@ -37,9 +37,16 @@ def namespace(namespace_name):
 
 # Product types
 
-SAFE_PRODUCT_TYPES = [
+USER_PRODUCT_TYPES = [
     'MSIL1C',
     'MSIL2A',
+]
+
+PDI_PRODUCT_TYPES = [
+    'MSI_L1C_DS',
+    'MSI_L1C_TL',
+    'MSI_L2A_DS',
+    'MSI_L2A_TL',
 ]
 
 AUX_EOF_PRODUCT_TYPES = [
@@ -226,6 +233,137 @@ class SAFEProduct(Sentinel2Product):
         return properties
 
 
+class PDIProduct(Sentinel2Product):
+
+    def __init__(self, product_type, zipped=False):
+        self.product_type = product_type
+        self.zipped = zipped
+        pattern = [
+            r"^(?P<mission>S2(_|A|B|C|D))",
+            r"(?P<file_class>.{4})",
+            r"(?P<product_type>%s)" % product_type,
+            r"(?P<site_centre>.{4})",
+            r"(?P<creation_date>[\dT]{15})",
+        ]
+        if product_type.endswith("DS"):
+            pattern.append(r"S(?P<validity_start>[\dT]{15})")
+        elif product_type.endswith("TL"):
+            pattern += [
+                r"A(?P<absolute_orbit>[\d]{6})",
+                r"T(?P<tile_number>.{5})",
+            ]
+        pattern.append(r"N(?P<processing_baseline>[\d]{2}\.[\d]{2})")
+        if zipped:
+            self.filename_pattern = "_".join(pattern) + r"\.zip$"
+        else:
+            self.filename_pattern = "_".join(pattern) + r"$"
+
+    def archive_path(self, properties):
+        validity_start = properties.core.validity_start.strftime("%Y%m%d")
+        return os.path.join(
+            properties.sentinel2.mission,
+            self.product_type,
+            validity_start[0:4],
+            validity_start[4:6],
+            validity_start[6:8],
+        )
+
+    def _analyze_inventory_metadata(self, root, properties):
+        ns = {"": "https://psd-12.sentinel2.eo.esa.int/PSD/Inventory_Metadata.xsd"}
+
+        core = properties.core
+        sentinel2 = properties.sentinel2
+        core.validity_start = datetime.strptime(root.find("./Validity_Start", ns).text, "UTC=%Y-%m-%dT%H:%M:%S.%f")
+        core.validity_stop = datetime.strptime(root.find("./Validity_Stop", ns).text, "UTC=%Y-%m-%dT%H:%M:%S.%f")
+        core.creation_date = datetime.strptime(root.find("./Generation_Time", ns).text, "UTC=%Y-%m-%dT%H:%M:%S.%f")
+        points = root.find("./Geographic_Localization/List_Of_Geo_Pnt", ns)
+        latitudes = [float(v.text) for v in points.findall("./Geo_Pnt/LATITUDE", ns)]
+        longitudes = [float(v.text) for v in points.findall("./Geo_Pnt/LONGITUDE", ns)]
+        linearring = LinearRing([Point(float(lon), float(lat)) for lat, lon in zip(latitudes, longitudes)])
+        core.footprint = Polygon([linearring])
+        sentinel2.datatake_id = root.find("./Group_ID", ns).text
+        sentinel2.absolute_orbit = int(sentinel2.datatake_id[21:27])
+        sentinel2.orbit_direction = "ascending" if root.find("./Ascending_Flag", ns).text == "true" else "descending"
+        sentinel2.processing_baseline = int(sentinel2.datatake_id[-5:].replace(".", ""))
+        sentinel2.cloud_cover = float(root.find("./CloudPercentage", ns).text)
+
+    def _analyze_mtd_ds(self, root, properties):
+        ns = {"n1": "https://psd-14.sentinel2.eo.esa.int/PSD/S2_PDI_Level-2A_Datastrip_Metadata.xsd"}
+
+        core = properties.core
+        sentinel2 = properties.sentinel2
+        general_info = root.find("./n1:General_Info", ns)
+        datatake_info = general_info.find("./Datatake_Info")
+        datastrip_info = general_info.find("./Datastrip_Time_Info")
+        processing_info = general_info.find("./Processing_Info")
+        core.validity_start = datetime.strptime(datastrip_info.find("./DATASTRIP_SENSING_START").text,
+                                                "%Y-%m-%dT%H:%M:%S.%fZ")
+        core.validity_stop = datetime.strptime(datastrip_info.find("./DATASTRIP_SENSING_STOP").text,
+                                               "%Y-%m-%dT%H:%M:%S.%fZ")
+        core.creation_date = datetime.strptime(general_info.find("./Archiving_Info/ARCHIVING_TIME").text,
+                                               "%Y-%m-%dT%H:%M:%S.%fZ")
+        sentinel2.datatake_id = datatake_info.get("datatakeIdentifier")
+        sentinel2.absolute_orbit = int(sentinel2.datatake_id[21:27])
+        sentinel2.relative_orbit = int(datatake_info.find("./SENSING_ORBIT_NUMBER").text)
+        sentinel2.orbit_direction = datatake_info.find("./SENSING_ORBIT_DIRECTION").text.lower()
+        sentinel2.processing_baseline = int(sentinel2.datatake_id[-5:].replace(".", ""))
+        sentinel2.processing_facility = processing_info.find("./PROCESSING_CENTER").text
+
+    def _analyze_mtd_tl(self, root, properties):
+        ns = {"n1": "https://psd-14.sentinel2.eo.esa.int/PSD/S2_PDI_Level-2A_Tile_Metadata.xsd"}
+
+        core = properties.core
+        sentinel2 = properties.sentinel2
+        general_info = root.find("./n1:General_Info", ns)
+        tile_id = general_info.find("./TILE_ID").text
+        core.validity_start = datetime.strptime(general_info.find("./SENSING_TIME").text, "%Y-%m-%dT%H:%M:%S.%fZ")
+        core.creation_date = datetime.strptime(general_info.find("./Archiving_Info/ARCHIVING_TIME").text,
+                                               "%Y-%m-%dT%H:%M:%S.%fZ")
+        sentinel2.absolute_orbit = int(tile_id[42:48])
+        sentinel2.tile_number = tile_id[50:55]
+        sentinel2.processing_baseline = int(tile_id[-5:].replace(".", ""))
+        sentinel2.processing_facility = tile_id[20:24]
+
+        qi_info = root.find("./n1:Quality_Indicators_Info", ns)
+        sentinel2.cloud_cover = float(qi_info.find("./Image_Content_QI/CLOUDY_PIXEL_PERCENTAGE").text)
+
+    def analyze(self, paths, filename_only=False):
+        inpath = paths[0]
+        name_attrs = self.parse_filename(inpath)
+
+        properties = Struct()
+
+        core = properties.core = Struct()
+        core.product_name = os.path.splitext(os.path.basename(inpath))[0]
+        if self.zipped:
+            core.product_name = os.path.splitext(core.product_name)[0]
+        if 'validity_start' in name_attrs:
+            core.validity_start = datetime.strptime(name_attrs['validity_start'], "%Y%m%dT%H%M%S")
+        core.creation_date = datetime.strptime(name_attrs['creation_date'], "%Y%m%dT%H%M%S")
+
+        sentinel2 = properties.sentinel2 = Struct()
+        sentinel2.mission = name_attrs['mission']
+        if sentinel2.mission[2] == "_":
+            sentinel2.mission = sentinel2.mission[0:2]
+        sentinel2.processing_facility = name_attrs['site_centre']
+        sentinel2.processing_baseline = int(name_attrs['processing_baseline'].replace(".", ""))
+        if 'absolute_orbit' in name_attrs:
+            sentinel2.absolute_orbit = int(name_attrs['absolute_orbit'])
+        if 'tile_number' in name_attrs:
+            sentinel2.tile_number = name_attrs['tile_number']
+
+        if not filename_only:
+            # Update properties based on inventory metadata content
+            if self.product_type.startswith("MSI_L1C"):
+                self._analyze_inventory_metadata(self.read_xml_component(inpath, "Inventory_Metadata.xml"), properties)
+            elif self.product_type == "MSI_L2A_DS":
+                self._analyze_mtd_ds(self.read_xml_component(inpath, "MTD_DS.xml"), properties)
+            elif self.product_type == "MSI_L2A_TL":
+                self._analyze_mtd_tl(self.read_xml_component(inpath, "MTD_TL.xml"), properties)
+
+        return properties
+
+
 class EOFProduct(Sentinel2Product):
 
     def __init__(self, product_type, split=False, zipped=False, filename_base_pattern=None, ext="EOF"):
@@ -381,7 +519,8 @@ class IERSProduct(EOFProduct):
 
 
 _product_types = dict(
-    [(product_type, SAFEProduct(product_type)) for product_type in SAFE_PRODUCT_TYPES] +
+    [(product_type, SAFEProduct(product_type)) for product_type in USER_PRODUCT_TYPES] +
+    [(product_type, PDIProduct(product_type)) for product_type in PDI_PRODUCT_TYPES] +
     [(product_type, EOFProduct(product_type)) for product_type in AUX_EOF_PRODUCT_TYPES] +
     [(product_type, EOFProduct(product_type, split=True)) for product_type in AUX_HDR_DBL_PRODUCT_TYPES] +
     [(product_type, GIPPProduct(product_type)) for product_type in GIPP_PRODUCT_TYPES] +
