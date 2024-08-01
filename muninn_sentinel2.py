@@ -58,50 +58,51 @@ AUX_HDR_DBL_PRODUCT_TYPES = [
     'AUX_PROQUA',
 ]
 
-GIPP_PRODUCT_TYPES = [
-    'GIP_ATMIMA',
-    'GIP_ATMSAD',
-    'GIP_BLINDP',
-    'GIP_CLOINV',
-    'GIP_CLOPAR',
-    'GIP_CONVER',
-    'GIP_DATATI',
-    'GIP_DECOMP',
-    'GIP_EARMOD',
-    'GIP_ECMWFP',
-    'GIP_G2PARA',
-    'GIP_G2PARE',
-    'GIP_GEOPAR',
-    'GIP_INTDET',
-    'GIP_INVLOC',
-    'GIP_JP2KPA',
-    'GIP_L2ACAC',
-    'GIP_L2ACSC',
-    'GIP_LREXTR',
-    'GIP_MASPAR',
-    'GIP_OLQCPA',
-    'GIP_PRDLOC',
-    'GIP_PROBA2',
-    'GIP_PROBAS',
-    'GIP_R2ABCA',
-    'GIP_R2BINN',
-    'GIP_R2CRCO',
-    'GIP_R2DECT',
-    'GIP_R2DEFI',
-    'GIP_R2DENT',
-    'GIP_R2DEPI',
-    'GIP_R2EOB2',
-    'GIP_R2EQOG',
-    'GIP_R2L2NC',
-    'GIP_R2NOMO',
-    'GIP_R2PARA',
-    'GIP_R2SWIR',
-    'GIP_R2WAFI',
-    'GIP_RESPAR',
-    'GIP_SPAMOD',
-    'GIP_TILPAR',
-    'GIP_VIEDIR',
-]
+# Not every GIPP HDR file uses the xmlns namespace, so we need to keep track of which product type does
+GIPP_PRODUCT_TYPES = {
+    'GIP_ATMIMA': True,
+    'GIP_ATMSAD': True,
+    'GIP_BLINDP': True,
+    'GIP_CLOINV': True,
+    'GIP_CLOPAR': True,
+    'GIP_CONVER': False,
+    'GIP_DATATI': True,
+    'GIP_DECOMP': False,
+    'GIP_EARMOD': True,
+    'GIP_ECMWFP': False,
+    'GIP_G2PARA': True,
+    'GIP_G2PARE': True,
+    'GIP_GEOPAR': True,
+    'GIP_INTDET': True,
+    'GIP_INVLOC': True,
+    'GIP_JP2KPA': False,
+    'GIP_L2ACAC': True,
+    'GIP_L2ACSC': True,
+    'GIP_LREXTR': True,
+    'GIP_MASPAR': True,
+    'GIP_OLQCPA': True,
+    'GIP_PRDLOC': True,
+    'GIP_PROBA2': False,
+    'GIP_PROBAS': False,
+    'GIP_R2ABCA': False,
+    'GIP_R2BINN': True,
+    'GIP_R2CRCO': True,
+    'GIP_R2DECT': True,
+    'GIP_R2DEFI': True,
+    'GIP_R2DENT': True,
+    'GIP_R2DEPI': True,
+    'GIP_R2EOB2': False,
+    'GIP_R2EQOG': False,
+    'GIP_R2L2NC': True,
+    'GIP_R2NOMO': True,
+    'GIP_R2PARA': True,
+    'GIP_R2SWIR': False,
+    'GIP_R2WAFI': True,
+    'GIP_RESPAR': True,
+    'GIP_SPAMOD': True,
+    'GIP_TILPAR': True,
+    'GIP_VIEDIR': True,
+}
 
 IERS_PRODUCT_TYPES = [
     'AUX_UT1UTC',
@@ -495,7 +496,7 @@ class EOFProduct(Sentinel2Product):
 
 
 class GIPPProduct(EOFProduct):
-    def __init__(self, product_type, zipped=False):
+    def __init__(self, product_type, has_xmlns, zipped=False):
         pattern = [
             r"(?P<mission>S2(_|A|B|C|D))",
             r"(?P<file_class>.{4})",
@@ -507,7 +508,8 @@ class GIPPProduct(EOFProduct):
             r"B(?P<band>(00|01|02|03|04|05|06|07|08|8A|09|10|11|12))"
         ]
         super().__init__(product_type, split=True, zipped=zipped, filename_base_pattern="_".join(pattern))
-        self.xml_namespace = {"": "http://eop-cfi.esa.int/S2/S2_SCHEMAS"}
+        if has_xmlns:
+            self.xml_namespace = {"": "http://eop-cfi.esa.int/S2/S2_SCHEMAS"}
 
 
 class IERSProduct(EOFProduct):
@@ -523,7 +525,7 @@ _product_types = dict(
     [(product_type, PDIProduct(product_type)) for product_type in PDI_PRODUCT_TYPES] +
     [(product_type, EOFProduct(product_type)) for product_type in AUX_EOF_PRODUCT_TYPES] +
     [(product_type, EOFProduct(product_type, split=True)) for product_type in AUX_HDR_DBL_PRODUCT_TYPES] +
-    [(product_type, GIPPProduct(product_type)) for product_type in GIPP_PRODUCT_TYPES] +
+    [(product_type, GIPPProduct(product_type, has_xmlns)) for product_type, has_xmlns in GIPP_PRODUCT_TYPES.items()] +
     [(product_type, IERSProduct(product_type)) for product_type in IERS_PRODUCT_TYPES]
 )
 
