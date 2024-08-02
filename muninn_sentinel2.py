@@ -183,9 +183,9 @@ class Sentinel2Product(object):
                 with zipfile.ZipFile(filepath) as zproduct:
                     with zproduct.open(componentpath) as manifest:
                         return parse(manifest).getroot()
-            elif self.package_format == "zip":
-                with zipfile.ZipFile(filepath) as zproduct:
-                    with zproduct.open(componentpath) as manifest:
+            elif self.package_format == "tar":
+                with tarfile.open(filepath, "r") as tproduct:
+                    with tproduct.extractfile(componentpath) as manifest:
                         return parse(manifest).getroot()
             else:
                 raise Exception("Unsupported package format '%s'" % self.package_format)
@@ -278,6 +278,7 @@ class PDIProduct(Sentinel2Product):
 
     def __init__(self, product_type, packaged=False):
         self.product_type = product_type
+        self.is_multi_file_product = False
         self.packaged = packaged
         self.package_format = "tar"
         pattern = [
