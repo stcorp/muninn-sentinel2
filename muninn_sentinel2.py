@@ -109,6 +109,23 @@ IERS_PRODUCT_TYPES = [
 ]
 
 
+def package_tar(paths, target_filepath):
+    with tarfile.open(target_filepath, "w") as archive:
+        for path in paths:
+            rootlen = len(os.path.dirname(path)) + 1
+            archive.add(path, path[rootlen:])
+
+
+def package_zip(paths, target_filepath):
+    with zipfile.ZipFile(target_filepath, "x", zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
+        for path in paths:
+            rootlen = len(os.path.dirname(path)) + 1
+            for base, dirs, files in os.walk(path):
+                for file in files:
+                    fn = os.path.join(base, file)
+                    archive.write(fn, fn[rootlen:])
+
+
 class Sentinel2Product(object):
 
     def __init__(self, product_type):
@@ -140,7 +157,7 @@ class Sentinel2Product(object):
         return re.match(self.filename_pattern, os.path.basename(paths[0])) is not None
 
     def read_xml_component(self, filepath, componentpath):
-        if self.zipped:
+        if self.packaged:
             if not self.is_multi_file_product:
                 componentpath = os.path.join(os.path.splitext(os.path.basename(filepath))[0], componentpath)
             with zipfile.ZipFile(filepath) as zproduct:
@@ -153,9 +170,9 @@ class Sentinel2Product(object):
 
 class SAFEProduct(Sentinel2Product):
 
-    def __init__(self, product_type, zipped=False):
+    def __init__(self, product_type, packaged=False):
         self.product_type = product_type
-        self.zipped = zipped
+        self.packaged = packaged
         pattern = [
             r"^(?P<mission>S2(_|A|B|C|D))",
             r"(?P<product_type>%s)" % product_type,
@@ -165,7 +182,7 @@ class SAFEProduct(Sentinel2Product):
             r"T(?P<tile_number>.{5})",
             r"(?P<creation_date>[\dT]{15})",
         ]
-        if zipped:
+        if packaged:
             self.filename_pattern = "_".join(pattern) + r"\.SAFE\.zip$"
         else:
             self.filename_pattern = "_".join(pattern) + r"\.SAFE$"
@@ -214,7 +231,7 @@ class SAFEProduct(Sentinel2Product):
 
         core = properties.core = Struct()
         core.product_name = os.path.splitext(os.path.basename(inpath))[0]
-        if self.zipped:
+        if self.packaged:
             core.product_name = os.path.splitext(core.product_name)[0]
         core.validity_start = datetime.strptime(name_attrs['validity_start'], "%Y%m%dT%H%M%S")
 
@@ -233,12 +250,21 @@ class SAFEProduct(Sentinel2Product):
 
         return properties
 
+    def export_zip(self, archive, properties, target_path, paths):
+        if self.packaged:
+            assert len(paths) == 1, "zipped product should be a single file"
+            copy_path(paths[0], target_path)
+            return os.path.join(target_path, os.path.basename(paths[0]))
+        target_filepath = os.path.join(os.path.abspath(target_path), properties.core.physical_name + ".zip")
+        package_zip(paths, target_filepath)
+        return target_filepath
+
 
 class PDIProduct(Sentinel2Product):
 
-    def __init__(self, product_type, zipped=False):
+    def __init__(self, product_type, packaged=False):
         self.product_type = product_type
-        self.zipped = zipped
+        self.packaged = packaged
         pattern = [
             r"^(?P<mission>S2(_|A|B|C|D))",
             r"(?P<file_class>.{4})",
@@ -254,8 +280,8 @@ class PDIProduct(Sentinel2Product):
                 r"T(?P<tile_number>.{5})",
             ]
         pattern.append(r"N(?P<processing_baseline>[\d]{2}\.[\d]{2})")
-        if zipped:
-            self.filename_pattern = "_".join(pattern) + r"\.zip$"
+        if packaged:
+            self.filename_pattern = "_".join(pattern) + r"\.tar$"
         else:
             self.filename_pattern = "_".join(pattern) + r"$"
 
@@ -336,7 +362,7 @@ class PDIProduct(Sentinel2Product):
 
         core = properties.core = Struct()
         core.product_name = os.path.splitext(os.path.basename(inpath))[0]
-        if self.zipped:
+        if self.packaged:
             core.product_name = os.path.splitext(core.product_name)[0]
         if 'validity_start' in name_attrs:
             core.validity_start = datetime.strptime(name_attrs['validity_start'], "%Y%m%dT%H%M%S")
@@ -364,13 +390,22 @@ class PDIProduct(Sentinel2Product):
 
         return properties
 
+    def export_tar(self, archive, properties, target_path, paths):
+        if self.packaged:
+            assert len(paths) == 1, "tarred product should be a single file"
+            copy_path(paths[0], target_path)
+            return os.path.join(target_path, os.path.basename(paths[0]))
+        target_filepath = os.path.join(os.path.abspath(target_path), properties.core.physical_name + ".tar")
+        package_tar(paths, target_filepath)
+        return target_filepath
+
 
 class EOFProduct(Sentinel2Product):
 
-    def __init__(self, product_type, split=False, zipped=False, filename_base_pattern=None, ext="EOF"):
+    def __init__(self, product_type, split=False, packaged=False, filename_base_pattern=None, ext="EOF"):
         self.product_type = product_type
         self.is_multi_file_product = split
-        self.zipped = zipped
+        self.packaged = packaged
         self.xml_namespace = {}
         if filename_base_pattern is None:
             pattern = [
@@ -386,23 +421,23 @@ class EOFProduct(Sentinel2Product):
         else:
             self.filename_pattern = filename_base_pattern
         if self.is_multi_file_product:
-            if self.zipped:
+            if self.packaged:
                 self.filename_pattern += r"\.TGZ$"
         else:
-            if self.zipped:
+            if self.packaged:
                 self.filename_pattern += r"\." + ext + r"\.zip$"
             else:
                 self.filename_pattern += r"\." + ext + r"$"
 
     @property
     def use_enclosing_directory(self):
-        return self.is_multi_file_product and not self.zipped
+        return self.is_multi_file_product and not self.packaged
 
     def enclosing_directory(self, properties):
         return properties.core.product_name
 
     def identify(self, paths):
-        if self.is_multi_file_product and not self.zipped:
+        if self.is_multi_file_product and not self.packaged:
             if len(paths) != 2:
                 return False
             paths = sorted(paths)
@@ -431,7 +466,7 @@ class EOFProduct(Sentinel2Product):
 
     def read_xml_header(self, filepath):
         if self.is_multi_file_product:
-            if self.zipped:
+            if self.packaged:
                 hdrpath = os.path.splitext(os.path.basename(filepath))[0] + ".HDR"
                 with tarfile.open(filepath, "r:gz") as tar:
                     return parse(tar.extractfile(hdrpath)).getroot()
@@ -440,7 +475,7 @@ class EOFProduct(Sentinel2Product):
                     return parse(hdrfile).getroot()
         else:
             ns = self.xml_namespace
-            if self.zipped:
+            if self.packaged:
                 with zipfile.ZipFile(filepath) as zproduct:
                     eofpath = os.path.splitext(os.path.basename(filepath))[0] + ".EOF"
                     with zproduct.open(eofpath) as eoffile:
@@ -450,7 +485,7 @@ class EOFProduct(Sentinel2Product):
                     return parse(eoffile).getroot().find("./Earth_Explorer_Header", ns)
 
     def analyze(self, paths, filename_only=False):
-        if self.is_multi_file_product and not self.zipped:
+        if self.is_multi_file_product and not self.packaged:
             name_attrs = self.parse_filename(os.path.splitext(os.path.basename(paths[0]))[0])
             inpath = sorted(paths)[-1]  # use the .HDR for metadata extraction
         else:
@@ -496,7 +531,7 @@ class EOFProduct(Sentinel2Product):
 
 
 class GIPPProduct(EOFProduct):
-    def __init__(self, product_type, has_xmlns, zipped=False):
+    def __init__(self, product_type, has_xmlns, packaged=False):
         pattern = [
             r"(?P<mission>S2(_|A|B|C|D))",
             r"(?P<file_class>.{4})",
@@ -507,14 +542,14 @@ class GIPPProduct(EOFProduct):
             r"(?P<validity_stop>[\dT]{15})",
             r"B(?P<band>(00|01|02|03|04|05|06|07|08|8A|09|10|11|12))"
         ]
-        super().__init__(product_type, split=True, zipped=zipped, filename_base_pattern="_".join(pattern))
+        super().__init__(product_type, split=True, packaged=packaged, filename_base_pattern="_".join(pattern))
         if has_xmlns:
             self.xml_namespace = {"": "http://eop-cfi.esa.int/S2/S2_SCHEMAS"}
 
 
 class IERSProduct(EOFProduct):
-    def __init__(self, product_type, zipped=False):
-        super().__init__(product_type, zipped=zipped, ext="txt")
+    def __init__(self, product_type, packaged=False):
+        super().__init__(product_type, packaged=packaged, ext="txt")
 
     def analyze(self, paths, filename_only=False):
         return super().analyze(paths, filename_only=True)
