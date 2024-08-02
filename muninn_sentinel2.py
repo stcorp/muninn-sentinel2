@@ -8,6 +8,7 @@ from xml.etree.ElementTree import parse
 from muninn.schema import Mapping, Text, Integer, Real
 from muninn.geometry import Point, LinearRing, Polygon
 from muninn.struct import Struct
+from muninn.util import copy_path
 
 
 # Namespaces
@@ -109,8 +110,11 @@ IERS_PRODUCT_TYPES = [
 ]
 
 
-def package_tar(paths, target_filepath):
-    with tarfile.open(target_filepath, "w") as archive:
+def package_tar(paths, target_filepath, compression=None):
+    mode = "w"
+    if compression is not None:
+        mode += ":" + compression
+    with tarfile.open(target_filepath, mode) as archive:
         for path in paths:
             rootlen = len(os.path.dirname(path)) + 1
             archive.add(path, path[rootlen:])
@@ -120,10 +124,13 @@ def package_zip(paths, target_filepath):
     with zipfile.ZipFile(target_filepath, "x", zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
         for path in paths:
             rootlen = len(os.path.dirname(path)) + 1
-            for base, dirs, files in os.walk(path):
-                for file in files:
-                    fn = os.path.join(base, file)
-                    archive.write(fn, fn[rootlen:])
+            if os.path.isdir(path):
+                for base, dirs, files in os.walk(path):
+                    for file in files:
+                        fn = os.path.join(base, file)
+                        archive.write(fn, fn[rootlen:])
+            else:
+                archive.write(path, path[rootlen:])
 
 
 class Sentinel2Product(object):
@@ -132,6 +139,8 @@ class Sentinel2Product(object):
         self.product_type = product_type
         self.is_multi_file_product = False
         self.filename_pattern = None
+        self.packaged = False
+        self.package_format = None
 
     @property
     def hash_type(self):
@@ -170,9 +179,16 @@ class Sentinel2Product(object):
         if self.packaged:
             if not self.is_multi_file_product:
                 componentpath = os.path.join(os.path.splitext(os.path.basename(filepath))[0], componentpath)
-            with zipfile.ZipFile(filepath) as zproduct:
-                with zproduct.open(componentpath) as manifest:
-                    return parse(manifest).getroot()
+            if self.package_format == "zip":
+                with zipfile.ZipFile(filepath) as zproduct:
+                    with zproduct.open(componentpath) as manifest:
+                        return parse(manifest).getroot()
+            elif self.package_format == "zip":
+                with zipfile.ZipFile(filepath) as zproduct:
+                    with zproduct.open(componentpath) as manifest:
+                        return parse(manifest).getroot()
+            else:
+                raise Exception("Unsupported package format '%s'" % self.package_format)
         else:
             with open(os.path.join(filepath, componentpath)) as manifest:
                 return parse(manifest).getroot()
@@ -183,6 +199,7 @@ class SAFEProduct(Sentinel2Product):
     def __init__(self, product_type, packaged=False):
         self.product_type = product_type
         self.packaged = packaged
+        self.package_format = "zip"
         pattern = [
             r"^(?P<mission>S2(_|A|B|C|D))",
             r"(?P<product_type>%s)" % product_type,
@@ -262,6 +279,7 @@ class PDIProduct(Sentinel2Product):
     def __init__(self, product_type, packaged=False):
         self.product_type = product_type
         self.packaged = packaged
+        self.package_format = "tar"
         pattern = [
             r"^(?P<mission>S2(_|A|B|C|D))",
             r"(?P<file_class>.{4})",
@@ -393,6 +411,10 @@ class EOFProduct(Sentinel2Product):
         self.product_type = product_type
         self.is_multi_file_product = split
         self.packaged = packaged
+        if self.is_multi_file_product:
+            self.package_format = "tgz"
+        else:
+            self.package_format = "zip"
         self.xml_namespace = {}
         if filename_base_pattern is None:
             pattern = [
@@ -502,6 +524,24 @@ class EOFProduct(Sentinel2Product):
             sentinel2.processor_version = header.find("./Fixed_Header/Source/Creator_Version", ns).text
 
         return properties
+
+    def export_tgz(self, archive, properties, target_path, paths):
+        if self.packaged and self.package_format == "tgz":
+            assert len(paths) == 1, "tarred product should be a single file"
+            copy_path(paths[0], target_path)
+            return os.path.join(target_path, os.path.basename(paths[0]))
+        target_filepath = os.path.join(os.path.abspath(target_path), properties.core.physical_name + ".TGZ")
+        package_tar(paths, target_filepath, compression="gz")
+        return target_filepath
+
+    def export_zip(self, archive, properties, target_path, paths):
+        if self.packaged and self.package_format == "zip":
+            assert len(paths) == 1, "zipped product should be a single file"
+            copy_path(paths[0], target_path)
+            return os.path.join(target_path, os.path.basename(paths[0]))
+        target_filepath = os.path.join(os.path.abspath(target_path), properties.core.physical_name + ".zip")
+        package_zip(paths, target_filepath)
+        return target_filepath
 
 
 class GIPPProduct(EOFProduct):
