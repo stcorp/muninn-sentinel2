@@ -156,6 +156,16 @@ class Sentinel2Product(object):
             return False
         return re.match(self.filename_pattern, os.path.basename(paths[0])) is not None
 
+    def archive_path(self, properties):
+        validity_start = properties.core.validity_start.strftime("%Y%m%d")
+        return os.path.join(
+            properties.sentinel2.mission,
+            self.product_type,
+            validity_start[0:4],
+            validity_start[4:6],
+            validity_start[6:8],
+        )
+
     def read_xml_component(self, filepath, componentpath):
         if self.packaged:
             if not self.is_multi_file_product:
@@ -186,19 +196,6 @@ class SAFEProduct(Sentinel2Product):
             self.filename_pattern = "_".join(pattern) + r"\.SAFE\.zip$"
         else:
             self.filename_pattern = "_".join(pattern) + r"\.SAFE$"
-
-    def archive_path(self, properties):
-        name_attrs = self.parse_filename(properties.core.physical_name)
-        mission = name_attrs['mission']
-        if mission[2] == "_":
-            mission = mission[0:2]
-        return os.path.join(
-            mission,
-            name_attrs['product_type'],
-            name_attrs['validity_start'][0:4],
-            name_attrs['validity_start'][4:6],
-            name_attrs['validity_start'][6:8],
-        )
 
     def _analyze_mtd(self, root, properties):
         ns = {"n1": "https://psd-14.sentinel2.eo.esa.int/PSD/User_Product_Level-" + self.product_type[-2:] + ".xsd"}
@@ -284,16 +281,6 @@ class PDIProduct(Sentinel2Product):
             self.filename_pattern = "_".join(pattern) + r"\.tar$"
         else:
             self.filename_pattern = "_".join(pattern) + r"$"
-
-    def archive_path(self, properties):
-        validity_start = properties.core.validity_start.strftime("%Y%m%d")
-        return os.path.join(
-            properties.sentinel2.mission,
-            self.product_type,
-            validity_start[0:4],
-            validity_start[4:6],
-            validity_start[6:8],
-        )
 
     def _analyze_inventory_metadata(self, root, properties):
         ns = {"": "https://psd-12.sentinel2.eo.esa.int/PSD/Inventory_Metadata.xsd"}
@@ -450,19 +437,6 @@ class EOFProduct(Sentinel2Product):
             if len(paths) != 1:
                 return False
             return re.match(self.filename_pattern, os.path.basename(paths[0])) is not None
-
-    def archive_path(self, properties):
-        name_attrs = self.parse_filename(properties.core.physical_name)
-        mission = name_attrs['mission']
-        if mission[2] == "_":
-            mission = mission[0:2]
-        return os.path.join(
-            mission,
-            name_attrs['product_type'],
-            name_attrs['validity_start'][0:4],
-            name_attrs['validity_start'][4:6],
-            name_attrs['validity_start'][6:8],
-        )
 
     def read_xml_header(self, filepath):
         if self.is_multi_file_product:
