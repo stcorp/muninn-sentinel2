@@ -350,6 +350,7 @@ class PDIProduct(Sentinel2Product):
         general_info = root.find("./n1:General_Info", ns)
         tile_id = general_info.find("./TILE_ID").text
         core.validity_start = datetime.strptime(general_info.find("./SENSING_TIME").text, "%Y-%m-%dT%H:%M:%S.%fZ")
+        core.validity_stop = core.validity_start
         core.creation_date = datetime.strptime(general_info.find("./Archiving_Info/ARCHIVING_TIME").text,
                                                "%Y-%m-%dT%H:%M:%S.%fZ")
         sentinel2.absolute_orbit = int(tile_id[42:48])
