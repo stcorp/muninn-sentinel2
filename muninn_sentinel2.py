@@ -368,7 +368,7 @@ class PDIProduct(Sentinel2Product):
         properties = Struct()
 
         core = properties.core = Struct()
-        core.product_name = os.path.splitext(os.path.basename(inpath))[0]
+        core.product_name = os.path.basename(inpath)
         if self.packaged:
             core.product_name = os.path.splitext(core.product_name)[0]
         if 'validity_start' in name_attrs:
