@@ -306,9 +306,6 @@ class PDIProduct(Sentinel2Product):
 
         core = properties.core
         sentinel2 = properties.sentinel2
-        core.validity_start = datetime.strptime(root.find("./Validity_Start", ns).text, "UTC=%Y-%m-%dT%H:%M:%S.%f")
-        core.validity_stop = datetime.strptime(root.find("./Validity_Stop", ns).text, "UTC=%Y-%m-%dT%H:%M:%S.%f")
-        core.creation_date = datetime.strptime(root.find("./Generation_Time", ns).text, "UTC=%Y-%m-%dT%H:%M:%S.%f")
         points = root.find("./Geographic_Localization/List_Of_Geo_Pnt", ns)
         latitudes = [float(v.text) for v in points.findall("./Geo_Pnt/LATITUDE", ns)]
         longitudes = [float(v.text) for v in points.findall("./Geo_Pnt/LONGITUDE", ns)]
@@ -320,7 +317,39 @@ class PDIProduct(Sentinel2Product):
         sentinel2.processing_baseline = int(sentinel2.datatake_id[-5:].replace(".", ""))
         sentinel2.cloud_cover = float(root.find("./CloudPercentage", ns).text)
 
-    def _analyze_mtd_ds(self, root, properties):
+    def _analyze_mtd_ds_l1(self, root, properties):
+        ns = {"n1": "https://psd-14.sentinel2.eo.esa.int/PSD/S2_PDI_Level-1C_Datastrip_Metadata.xsd"}
+
+        core = properties.core
+        sentinel2 = properties.sentinel2
+        general_info = root.find("./n1:General_Info", ns)
+        datatake_info = general_info.find("./Datatake_Info")
+        datastrip_info = general_info.find("./Datastrip_Time_Info")
+        core.validity_start = datetime.strptime(datastrip_info.find("./DATASTRIP_SENSING_START").text,
+                                                "%Y-%m-%dT%H:%M:%S.%fZ")
+        core.validity_stop = datetime.strptime(datastrip_info.find("./DATASTRIP_SENSING_STOP").text,
+                                               "%Y-%m-%dT%H:%M:%S.%fZ")
+        core.creation_date = datetime.strptime(general_info.find("./Archiving_Info/ARCHIVING_TIME").text,
+                                               "%Y-%m-%dT%H:%M:%S.%fZ")
+        sentinel2.relative_orbit = int(datatake_info.find("./SENSING_ORBIT_NUMBER").text)
+
+    def _analyze_mtd_tl_l1(self, root, properties):
+        ns = {"n1": "https://psd-14.sentinel2.eo.esa.int/PSD/S2_PDI_Level-1C_Tile_Metadata.xsd"}
+
+        core = properties.core
+        sentinel2 = properties.sentinel2
+        general_info = root.find("./n1:General_Info", ns)
+        tile_id = general_info.find("./TILE_ID").text
+        core.validity_start = datetime.strptime(general_info.find("./SENSING_TIME").text, "%Y-%m-%dT%H:%M:%S.%fZ")
+        core.validity_stop = core.validity_start
+        core.creation_date = datetime.strptime(general_info.find("./Archiving_Info/ARCHIVING_TIME").text,
+                                               "%Y-%m-%dT%H:%M:%S.%fZ")
+        sentinel2.tile_number = tile_id[50:55]
+
+        qi_info = root.find("./n1:Quality_Indicators_Info", ns)
+        sentinel2.cloud_cover = float(qi_info.find("./Image_Content_QI/CLOUDY_PIXEL_PERCENTAGE").text)
+
+    def _analyze_mtd_ds_l2(self, root, properties):
         ns = {"n1": "https://psd-14.sentinel2.eo.esa.int/PSD/S2_PDI_Level-2A_Datastrip_Metadata.xsd"}
 
         core = properties.core
@@ -342,7 +371,7 @@ class PDIProduct(Sentinel2Product):
         sentinel2.processing_baseline = int(sentinel2.datatake_id[-5:].replace(".", ""))
         sentinel2.processing_facility = processing_info.find("./PROCESSING_CENTER").text
 
-    def _analyze_mtd_tl(self, root, properties):
+    def _analyze_mtd_tl_l2(self, root, properties):
         ns = {"n1": "https://psd-14.sentinel2.eo.esa.int/PSD/S2_PDI_Level-2A_Tile_Metadata.xsd"}
 
         core = properties.core
@@ -389,11 +418,16 @@ class PDIProduct(Sentinel2Product):
         if not filename_only:
             # Update properties based on inventory metadata content
             if self.product_type.startswith("MSI_L1C"):
+                metadata_filename = core.product_name[:9]+"MTD"+core.product_name[12:-7]+".xml"
                 self._analyze_inventory_metadata(self.read_xml_component(inpath, "Inventory_Metadata.xml"), properties)
+                if self.product_type.endswith("DS"):
+                    self._analyze_mtd_ds_l1(self.read_xml_component(inpath,metadata_filename), properties)
+                elif self.product_type.endswith("TL"):
+                    self._analyze_mtd_tl_l1(self.read_xml_component(inpath,metadata_filename), properties)
             elif self.product_type == "MSI_L2A_DS":
-                self._analyze_mtd_ds(self.read_xml_component(inpath, "MTD_DS.xml"), properties)
+                self._analyze_mtd_ds_l2(self.read_xml_component(inpath, "MTD_DS.xml"), properties)
             elif self.product_type == "MSI_L2A_TL":
-                self._analyze_mtd_tl(self.read_xml_component(inpath, "MTD_TL.xml"), properties)
+                self._analyze_mtd_tl_l2(self.read_xml_component(inpath, "MTD_TL.xml"), properties)
 
         return properties
 
